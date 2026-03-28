@@ -40,30 +40,46 @@ type RegionResult struct {
 	Err error
 }
 
-// SuccessfulAccounts returns account results where Err == nil.
+// accountFailed reports whether an account should be treated as failed:
+// either the account-level visitor errored, or any region visitor errored.
+func accountFailed(a *AccountResult) bool {
+	if a.Err != nil {
+		return true
+	}
+	for _, rr := range a.Regions {
+		if rr.Err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// SuccessfulAccounts returns accounts where neither the account-level visitor
+// nor any region visitor returned an error.
 func (r *VisitResults) SuccessfulAccounts() []*AccountResult {
 	out := make([]*AccountResult, 0, len(r.Accounts))
 	for _, a := range r.Accounts {
-		if a.Err == nil {
+		if !accountFailed(a) {
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-// FailedAccounts returns account results where Err != nil.
+// FailedAccounts returns accounts where the account-level visitor errored OR
+// any region visitor errored.
 func (r *VisitResults) FailedAccounts() []*AccountResult {
 	out := make([]*AccountResult, 0)
 	for _, a := range r.Accounts {
-		if a.Err != nil {
+		if accountFailed(a) {
 			out = append(out, a)
 		}
 	}
 	return out
 }
 
-// SuccessRate returns the fraction of accounts with Err == nil.
-// Returns 0 if no accounts were visited.
+// SuccessRate returns the fraction of accounts with no account-level or
+// region-level errors. Returns 0 if no accounts were visited.
 func (r *VisitResults) SuccessRate() float64 {
 	if len(r.Accounts) == 0 {
 		return 0

@@ -37,7 +37,7 @@ func listAll(ctx context.Context, lister OrgLister) ([]string, error) {
 			return nil, fmt.Errorf("organizations.ListAccounts: %w", err)
 		}
 		for _, a := range out.Accounts {
-			if a.Status == types.AccountStatusActive && a.Id != nil {
+			if a.State == types.AccountStateActive && a.Id != nil {
 				ids = append(ids, *a.Id)
 			}
 		}
@@ -61,7 +61,7 @@ func listForParent(ctx context.Context, lister OrgLister, parentID string) ([]st
 			return nil, fmt.Errorf("organizations.ListAccountsForParent: %w", err)
 		}
 		for _, a := range out.Accounts {
-			if a.Status == types.AccountStatusActive && a.Id != nil {
+			if a.State == types.AccountStateActive && a.Id != nil {
 				ids = append(ids, *a.Id)
 			}
 		}

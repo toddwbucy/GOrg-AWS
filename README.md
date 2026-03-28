@@ -4,7 +4,7 @@ Go module implementing the AWS Organization Visitor pattern — a type-safe, con
 
 Callers supply visitor functions; `gorg-aws` handles Organizations API pagination, STS role assumption, and region discovery. Visitor functions receive a pre-configured `aws.Config` and never touch credentials or ARNs directly.
 
-```
+```bash
 go get github.com/toddwbucy/gorg-aws
 ```
 
@@ -20,7 +20,10 @@ import (
     gorgaws "github.com/toddwbucy/gorg-aws"
 )
 
-cfg, _ := config.LoadDefaultConfig(ctx)
+cfg, err := config.LoadDefaultConfig(ctx)
+if err != nil {
+    log.Fatalf("load config: %v", err)
+}
 
 v := gorgaws.New(cfg,
     gorgaws.WithConcurrency(20),
@@ -47,7 +50,7 @@ results, err := v.VisitOrganization(ctx, "com",
 
 The Go API maps directly to the Python original:
 
-```
+```text
 Python (existing):                          Go (gorg-aws):
 ──────────────────────────────────────────  ──────────────────────────────────────────
 visit_organization(                         v.VisitOrganization(
@@ -187,7 +190,7 @@ maintained directly by AWS. No third-party dependencies.
 
 Verify your build:
 
-```
+```bash
 go mod verify
 grep -v "^github.com/aws" go.sum  # should return nothing
 ```
@@ -212,7 +215,7 @@ for gorg-aws is the build pipeline only, not every server running the binary.
 
 ## Module Path
 
-```
+```text
 github.com/toddwbucy/gorg-aws
 ```
 

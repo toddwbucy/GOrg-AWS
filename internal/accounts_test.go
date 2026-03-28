@@ -53,20 +53,20 @@ func (s *stubOrgLister) ListAccountsForParent(_ context.Context, in *organizatio
 	return out, nil
 }
 
-func mkAccount(id string, status types.AccountStatus) types.Account {
-	return types.Account{Id: aws.String(id), Status: status}
+func mkAccount(id string, state types.AccountState) types.Account {
+	return types.Account{Id: aws.String(id), State: state}
 }
 
 func TestListAccounts_AllOrg(t *testing.T) {
 	stub := &stubOrgLister{
 		pages: [][]types.Account{
 			{
-				mkAccount("111111111111", types.AccountStatusActive),
-				mkAccount("222222222222", types.AccountStatusActive),
+				mkAccount("111111111111", types.AccountStateActive),
+				mkAccount("222222222222", types.AccountStateActive),
 			},
 			{
-				mkAccount("333333333333", types.AccountStatusActive),
-				mkAccount("444444444444", types.AccountStatusSuspended), // should be skipped
+				mkAccount("333333333333", types.AccountStateActive),
+				mkAccount("444444444444", types.AccountStateSuspended), // should be skipped
 			},
 		},
 	}
@@ -95,7 +95,7 @@ func TestListAccounts_AllOrg(t *testing.T) {
 func TestListAccounts_ForParent(t *testing.T) {
 	stub := &stubOrgLister{
 		forParentPages: [][]types.Account{
-			{mkAccount("555555555555", types.AccountStatusActive)},
+			{mkAccount("555555555555", types.AccountStateActive)},
 		},
 	}
 

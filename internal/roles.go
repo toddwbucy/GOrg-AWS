@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
@@ -14,11 +13,14 @@ import (
 // AssumedConfig returns an aws.Config pre-loaded with assumed-role credentials
 // for the given accountID and region. Callers never touch ARNs, tokens, or STS.
 //
+// baseCfg is copied and only Credentials and Region are overridden, so all
+// caller-provided customizations (HTTP client, retry policy, endpoints) are preserved.
+//
 // stscreds.NewAssumeRoleProvider + aws.NewCredentialsCache handles:
 //   - Initial STS AssumeRole call
 //   - Automatic credential refresh before the 1-hour expiry
 //   - No manual AccessKeyId/SecretAccessKey extraction (unlike the Python original)
-func AssumedConfig(ctx context.Context, baseCfg aws.Config, accountID, region, roleName string) (aws.Config, error) {
+func AssumedConfig(_ context.Context, baseCfg aws.Config, accountID, region, roleName string) (aws.Config, error) {
 	partition := PartitionCOM
 	if strings.HasPrefix(region, "us-gov-") {
 		partition = PartitionGOV
@@ -32,12 +34,10 @@ func AssumedConfig(ctx context.Context, baseCfg aws.Config, accountID, region, r
 		},
 	)
 
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithCredentialsProvider(aws.NewCredentialsCache(provider)),
-		config.WithRegion(region),
-	)
-	if err != nil {
-		return aws.Config{}, fmt.Errorf("load assumed config for %s: %w", accountID, err)
-	}
+	// Copy baseCfg so caller-provided customizations (HTTP client, retry config,
+	// endpoints, etc.) are preserved. Only credentials and region are overridden.
+	cfg := baseCfg.Copy()
+	cfg.Credentials = aws.NewCredentialsCache(provider)
+	cfg.Region = region
 	return cfg, nil
 }

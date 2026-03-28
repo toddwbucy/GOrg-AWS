@@ -77,7 +77,7 @@ func newTestVisitor(
 }
 
 func activeAccount(id string) orgtypes.Account {
-	return orgtypes.Account{Id: &id, Status: orgtypes.AccountStatusActive}
+	return orgtypes.Account{Id: &id, State: orgtypes.AccountStateActive}
 }
 
 // ── envConfig ─────────────────────────────────────────────────────────────
@@ -362,6 +362,17 @@ func TestVisitResults_SuccessRate(t *testing.T) {
 			},
 			want: 0,
 		},
+		{
+			name: "region-only failure",
+			accounts: map[string]*AccountResult{
+				"a": {
+					Err:     nil,
+					Regions: map[string]*RegionResult{"us-east-1": {Err: errors.New("throttled")}},
+				},
+				"b": {Err: nil},
+			},
+			want: 0.5,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -379,12 +390,17 @@ func TestVisitResults_SuccessfulAndFailedAccounts(t *testing.T) {
 			"a": {Err: nil},
 			"b": {Err: errors.New("boom")},
 			"c": {Err: nil},
+			// account-level Err is nil but a region failed — should be counted as failed
+			"d": {
+				Err:     nil,
+				Regions: map[string]*RegionResult{"us-east-1": {Err: errors.New("region boom")}},
+			},
 		},
 	}
 	if len(r.SuccessfulAccounts()) != 2 {
-		t.Errorf("SuccessfulAccounts=%d, want 2", len(r.SuccessfulAccounts()))
+		t.Errorf("SuccessfulAccounts=%d, want 2 (a and c)", len(r.SuccessfulAccounts()))
 	}
-	if len(r.FailedAccounts()) != 1 {
-		t.Errorf("FailedAccounts=%d, want 1", len(r.FailedAccounts()))
+	if len(r.FailedAccounts()) != 2 {
+		t.Errorf("FailedAccounts=%d, want 2 (b and d)", len(r.FailedAccounts()))
 	}
 }

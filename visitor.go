@@ -120,15 +120,19 @@ func (v *OrgVisitor) VisitOrganization(
 		return results, fmt.Errorf("%w: %s", ErrOrgAPI, err)
 	}
 
-	ec2Cfg := v.baseCfg.Copy()
-	ec2Cfg.Region = homeRegion
-	regions, err := internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
-	if err != nil {
-		return results, fmt.Errorf("%w: %s", ErrRegionAPI, err)
-	}
-
-	// Apply optional account filter.
+	// Apply filter before region discovery: no need to call EC2 if there are
+	// no accounts to visit, or if no RegionVisitor was provided.
 	accountIDs = v.applyFilter(accountIDs)
+
+	var regions []string
+	if onRegion != nil && len(accountIDs) > 0 {
+		ec2Cfg := v.baseCfg.Copy()
+		ec2Cfg.Region = homeRegion
+		regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
+		if err != nil {
+			return results, fmt.Errorf("%w: %s", ErrRegionAPI, err)
+		}
+	}
 
 	v.logger.Info("starting org visit",
 		"accounts", len(accountIDs),
@@ -163,6 +167,11 @@ func (v *OrgVisitor) VisitOrganization(
 	for _, ar := range results.Accounts {
 		if ar.Err != nil {
 			results.TotalErrors++
+		}
+		for _, rr := range ar.Regions {
+			if rr.Err != nil {
+				results.TotalErrors++
+			}
 		}
 	}
 	results.TimeElapsed = time.Since(start)

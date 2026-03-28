@@ -43,7 +43,7 @@ func GetUSRegions(ctx context.Context, describer RegionDescriber, includeGov boo
 		}
 		// When includeGov is false, skip GovCloud regions.
 		// Mirrors the Python original: include_gov=True returns all us-* regions.
-		if !includeGov && strings.Contains(name, "gov") {
+		if !includeGov && strings.HasPrefix(name, "us-gov-") {
 			continue
 		}
 		regions = append(regions, name)
