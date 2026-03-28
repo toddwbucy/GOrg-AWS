@@ -10,7 +10,9 @@ type VisitResults struct {
 	// TimeElapsed is the wall-clock duration of the full visit.
 	TimeElapsed time.Duration
 
-	// TotalErrors is the count of accounts where Err != nil.
+	// TotalErrors is the total count of errors encountered during the visit:
+	// account-level failures (AccountResult.Err != nil) plus per-region failures
+	// (RegionResult.Err != nil) summed across all accounts and all regions.
 	TotalErrors int
 }
 

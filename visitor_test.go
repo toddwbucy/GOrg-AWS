@@ -326,6 +326,29 @@ func TestDryRun_AppliesFilter(t *testing.T) {
 	}
 }
 
+func TestDryRun_AllFilteredSkipsRegionDiscovery(t *testing.T) {
+	accounts := []orgtypes.Account{activeAccount("111111111111")}
+	// ec2Mock errors — if GetUSRegions were called the test would fail.
+	v := New(aws.Config{})
+	orgMock := &mockOrgLister{accounts: accounts}
+	ec2Mock := &mockRegionDescriber{err: errors.New("should not be called")}
+	v.newOrgClient = func(_ aws.Config) internal.OrgLister { return orgMock }
+	v.newEC2Client = func(_ aws.Config) internal.RegionDescriber { return ec2Mock }
+	v.assumeRole = func(_ context.Context, base aws.Config, _, _, _ string) (aws.Config, error) { return base, nil }
+	v.filter = func(_ string) bool { return true } // filter everything
+
+	gotAccounts, gotRegions, err := v.DryRun(context.Background(), "com", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gotAccounts) != 0 {
+		t.Errorf("got %d accounts, want 0", len(gotAccounts))
+	}
+	if len(gotRegions) != 0 {
+		t.Errorf("got %d regions, want 0 (region discovery should be skipped)", len(gotRegions))
+	}
+}
+
 // ── VisitResults helpers ──────────────────────────────────────────────────
 
 func TestVisitResults_SuccessRate(t *testing.T) {

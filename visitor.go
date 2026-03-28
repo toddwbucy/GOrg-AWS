@@ -268,6 +268,13 @@ func (v *OrgVisitor) DryRun(
 		return nil, nil, fmt.Errorf("%w: %s", ErrOrgAPI, err)
 	}
 
+	// Apply filter before region discovery — no need to call EC2 if all
+	// accounts are filtered out. Mirrors the guard in VisitOrganization.
+	accountIDs = v.applyFilter(accountIDs)
+	if len(accountIDs) == 0 {
+		return accountIDs, nil, nil
+	}
+
 	ec2Cfg := v.baseCfg.Copy()
 	ec2Cfg.Region = homeRegion
 	regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
@@ -275,7 +282,6 @@ func (v *OrgVisitor) DryRun(
 		return nil, nil, fmt.Errorf("%w: %s", ErrRegionAPI, err)
 	}
 
-	accountIDs = v.applyFilter(accountIDs)
 	return accountIDs, regions, nil
 }
 
