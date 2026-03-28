@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to testconfig.json and fill in your values. testconfig.json is gitignored.",
+
+  "access_key_id":     "AKIA...",
+  "secret_access_key": "...",
+  "session_token":     "",
+
+  "env":         "com",
+  "role_name":   "OrganizationAccountAccessRole",
+  "parent_id":   "",
+  "concurrency": 5
+}

@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Integration test credentials — never commit real creds
+cmd/integration/testconfig.json
+
 # Editor/IDE
 # .idea/
 # .vscode/
