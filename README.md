@@ -195,15 +195,19 @@ go mod verify
 grep -v "^github.com/aws" go.sum  # should return nothing
 ```
 
-When built with `CGO_ENABLED=0`, gorg-aws produces a fully static binary with no
-runtime dependency loading, no site-packages directory, and no equivalent of Python's
-`.pth` file attack surface. With default CGO settings the binary may link against
-system libraries (glibc, libnss) depending on platform and build environment — use
-explicit build flags if a static binary is required:
+gorg-aws is a library — the static vs dynamic linking behaviour applies to the
+binary your application produces when it imports this module. With default CGO
+settings, the consuming binary may link against system libraries (glibc, libnss)
+depending on platform and build environment. Use explicit build flags to produce a
+fully static binary. You can verify this with the included examples:
 
 ```bash
-CGO_ENABLED=0 go build -ldflags="-s -w" ./...
+CGO_ENABLED=0 go build -ldflags="-s -w" ./examples/list_instances
+CGO_ENABLED=0 go build -ldflags="-s -w" ./examples/org_inventory
 ```
+
+There is no runtime dependency loading, no site-packages directory, and no
+equivalent of Python's `.pth` file attack surface in a binary built this way.
 
 The supply chain attack that compromised LiteLLM on 2026-03-24 (TeamPCP rewrote a
 `trivy-action` Git tag, exfiltrated a PyPI publish token, then pushed backdoored

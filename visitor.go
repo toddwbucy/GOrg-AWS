@@ -117,7 +117,7 @@ func (v *OrgVisitor) VisitOrganization(
 
 	accountIDs, err := internal.ListAccounts(ctx, v.newOrgClient(orgCfg), parentID)
 	if err != nil {
-		return results, fmt.Errorf("%w: %s", ErrOrgAPI, err)
+		return results, fmt.Errorf("%w: %w", ErrOrgAPI, err)
 	}
 
 	// Apply filter before region discovery: no need to call EC2 if there are
@@ -130,7 +130,7 @@ func (v *OrgVisitor) VisitOrganization(
 		ec2Cfg.Region = homeRegion
 		regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
 		if err != nil {
-			return results, fmt.Errorf("%w: %s", ErrRegionAPI, err)
+			return results, fmt.Errorf("%w: %w", ErrRegionAPI, err)
 		}
 	}
 
@@ -196,7 +196,7 @@ func (v *OrgVisitor) visitAccount(
 	if err != nil {
 		v.logger.Error("assume role failed", "account", accountID, "err", err)
 		mu.Lock()
-		results.Accounts[accountID].Err = fmt.Errorf("%w in %s: %s", ErrAssumeRole, accountID, err)
+		results.Accounts[accountID].Err = fmt.Errorf("%w in %s: %w", ErrAssumeRole, accountID, err)
 		mu.Unlock()
 		return
 	}
@@ -265,7 +265,7 @@ func (v *OrgVisitor) DryRun(
 	orgCfg.Region = homeRegion
 	accountIDs, err = internal.ListAccounts(ctx, v.newOrgClient(orgCfg), parentID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %s", ErrOrgAPI, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrOrgAPI, err)
 	}
 
 	// Apply filter before region discovery — no need to call EC2 if all
@@ -279,7 +279,7 @@ func (v *OrgVisitor) DryRun(
 	ec2Cfg.Region = homeRegion
 	regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %s", ErrRegionAPI, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrRegionAPI, err)
 	}
 
 	return accountIDs, regions, nil
