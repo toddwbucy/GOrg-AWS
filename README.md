@@ -12,6 +12,11 @@ go get github.com/toddwbucy/gorg-aws
 
 ## Quick Start
 
+The environment (`"com"` or `"gov"`) is derived from the home region of your
+management account using `EnvFromRegion`. This is the only configuration
+needed to target either the commercial or GovCloud partition — no separate
+`env` field required.
+
 ```go
 import (
     "context"
@@ -25,12 +30,20 @@ if err != nil {
     log.Fatalf("load config: %v", err)
 }
 
+// Derive "com" or "gov" from the management account's home region.
+// EnvFromRegion returns ErrInvalidEnv for any region outside the
+// supported set — catches misconfiguration at startup, not mid-run.
+env, err := gorgaws.EnvFromRegion(homeRegion) // e.g. "us-east-1" or "us-gov-west-1"
+if err != nil {
+    log.Fatalf("invalid home region: %v", err)
+}
+
 v := gorgaws.New(cfg,
     gorgaws.WithConcurrency(20),
     gorgaws.WithRoleName("OrganizationAccountAccessRole"),
 )
 
-results, err := v.VisitOrganization(ctx, "com",
+results, err := v.VisitOrganization(ctx, env,
     // AccountVisitor — called once per account
     func(ctx context.Context, cfg aws.Config, accountID string) (any, error) {
         // cfg already has assumed-role credentials — use it directly
@@ -53,17 +66,19 @@ The Go API maps directly to the Python original:
 ```text
 Python (existing):                          Go (gorg-aws):
 ──────────────────────────────────────────  ──────────────────────────────────────────
-visit_organization(                         v.VisitOrganization(
-  environment="gov",                            ctx, "gov",
-  account_visitor=fn,                           onAccount,
-  region_visitor=fn,                            onRegion,
-)                                               "",
+visit_organization(                         env, _ := gorgaws.EnvFromRegion(homeRegion)
+  environment="gov",                        v.VisitOrganization(
+  account_visitor=fn,                           ctx, env,
+  region_visitor=fn,                            onAccount,
+)                                               onRegion,
+                                                "",
                                             )
 
 account_visitor(session, account_id)        AccountVisitor(ctx, cfg, accountID)
 region_visitor(session, region, account_id) RegionVisitor(ctx, cfg, accountID, region)
 
 boto3.Session → pre-assumed credentials     aws.Config  → pre-assumed credentials
+Explicit "gov"/"com" string in config       Derived from home region via EnvFromRegion
 Sequential traversal                        Concurrent  (default: 10 accounts parallel)
 No dry-run capability                       DryRun() — preview scope before visiting
 ```
@@ -167,17 +182,33 @@ Sentinel errors:
 
 ## GovCloud
 
-Pass `env: "gov"` to target the GovCloud partition:
+Set `homeRegion` to a GovCloud region — `EnvFromRegion` handles the rest:
 
 ```go
-results, err := v.VisitOrganization(ctx, "gov", onAccount, onRegion, "")
+env, err := gorgaws.EnvFromRegion("us-gov-west-1") // returns "gov"
+if err != nil {
+    log.Fatalf("invalid home region: %v", err)
+}
+results, err := v.VisitOrganization(ctx, env, onAccount, onRegion, "")
 ```
 
 The module handles the partition differences automatically:
 - STS endpoint: `sts.us-gov-west-1.amazonaws.com`
 - IAM ARN format: `arn:aws-us-gov:iam::ACCOUNT:role/ROLE`
-- Home region for Organizations/EC2 discovery: `us-gov-west-1`
-- Region filter: `us-gov-*` only
+- Home region for Organizations API: `us-gov-west-1`
+- Region filter: `us-gov-east-1`, `us-gov-west-1` only
+
+Supported regions and their derived environments:
+
+| Region | `EnvFromRegion` result |
+|--------|------------------------|
+| `us-east-1` | `"com"` |
+| `us-east-2` | `"com"` |
+| `us-west-1` | `"com"` |
+| `us-west-2` | `"com"` |
+| `us-gov-east-1` | `"gov"` |
+| `us-gov-west-1` | `"gov"` |
+| anything else | `ErrInvalidEnv` |
 
 ---
 
