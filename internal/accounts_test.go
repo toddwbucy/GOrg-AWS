@@ -11,14 +11,18 @@ import (
 )
 
 type stubOrgLister struct {
-	pages    [][]types.Account // multi-page responses
-	pageIdx  int
-	forParentPages [][]types.Account
-	fpIdx    int
-	err      error
+	pages          [][]types.Account // multi-page responses for ListAccounts
+	pageIdx        int
+	forParentPages [][]types.Account // multi-page responses for ListAccountsForParent
+	fpIdx          int
+	// ousByParent maps parentID → child OUs for ListOrganizationalUnitsForParent
+	ousByParent map[string][]types.OrganizationalUnit
+	// accountsByParent overrides forParentPages when set, keyed by parentID
+	accountsByParent map[string][]types.Account
+	err              error
 }
 
-func (s *stubOrgLister) ListAccounts(_ context.Context, in *organizations.ListAccountsInput, _ ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error) {
+func (s *stubOrgLister) ListAccounts(_ context.Context, _ *organizations.ListAccountsInput, _ ...func(*organizations.Options)) (*organizations.ListAccountsOutput, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -39,22 +43,39 @@ func (s *stubOrgLister) ListAccountsForParent(_ context.Context, in *organizatio
 	if s.err != nil {
 		return nil, s.err
 	}
-	pages := s.forParentPages
-	if s.fpIdx >= len(pages) {
+	// Use per-parent map if populated.
+	if s.accountsByParent != nil {
+		accts := s.accountsByParent[aws.ToString(in.ParentId)]
+		return &organizations.ListAccountsForParentOutput{Accounts: accts}, nil
+	}
+	// Fall back to the simple pages slice.
+	if s.fpIdx >= len(s.forParentPages) {
 		return &organizations.ListAccountsForParentOutput{}, nil
 	}
-	page := pages[s.fpIdx]
+	page := s.forParentPages[s.fpIdx]
 	s.fpIdx++
 	out := &organizations.ListAccountsForParentOutput{Accounts: page}
-	if s.fpIdx < len(pages) {
+	if s.fpIdx < len(s.forParentPages) {
 		tok := "next"
 		out.NextToken = &tok
 	}
 	return out, nil
 }
 
+func (s *stubOrgLister) ListOrganizationalUnitsForParent(_ context.Context, in *organizations.ListOrganizationalUnitsForParentInput, _ ...func(*organizations.Options)) (*organizations.ListOrganizationalUnitsForParentOutput, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	ous := s.ousByParent[aws.ToString(in.ParentId)]
+	return &organizations.ListOrganizationalUnitsForParentOutput{OrganizationalUnits: ous}, nil
+}
+
 func mkAccount(id string, state types.AccountState) types.Account {
 	return types.Account{Id: aws.String(id), State: state}
+}
+
+func mkOU(id string) types.OrganizationalUnit {
+	return types.OrganizationalUnit{Id: aws.String(id)}
 }
 
 func TestListAccounts_AllOrg(t *testing.T) {
@@ -92,7 +113,7 @@ func TestListAccounts_AllOrg(t *testing.T) {
 	}
 }
 
-func TestListAccounts_ForParent(t *testing.T) {
+func TestListAccounts_ForParent_DirectOnly(t *testing.T) {
 	stub := &stubOrgLister{
 		forParentPages: [][]types.Account{
 			{mkAccount("555555555555", types.AccountStateActive)},
@@ -105,6 +126,45 @@ func TestListAccounts_ForParent(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != "555555555555" {
 		t.Errorf("got %v, want [555555555555]", ids)
+	}
+}
+
+// TestListAccounts_ForParent_Nested verifies that accounts in child OUs are
+// included when a parentID is given.
+//
+// Tree:
+//
+//	ou-root
+//	├── 111111111111  (direct account)
+//	└── ou-child
+//	    ├── 222222222222
+//	    └── ou-grandchild
+//	        └── 333333333333
+func TestListAccounts_ForParent_Nested(t *testing.T) {
+	stub := &stubOrgLister{
+		accountsByParent: map[string][]types.Account{
+			"ou-root":       {mkAccount("111111111111", types.AccountStateActive)},
+			"ou-child":      {mkAccount("222222222222", types.AccountStateActive)},
+			"ou-grandchild": {mkAccount("333333333333", types.AccountStateActive)},
+		},
+		ousByParent: map[string][]types.OrganizationalUnit{
+			"ou-root":  {mkOU("ou-child")},
+			"ou-child": {mkOU("ou-grandchild")},
+		},
+	}
+
+	ids, err := ListAccounts(context.Background(), stub, "ou-root")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Errorf("got %d accounts, want 3: %v", len(ids), ids)
+	}
+	want := map[string]bool{"111111111111": true, "222222222222": true, "333333333333": true}
+	for _, id := range ids {
+		if !want[id] {
+			t.Errorf("unexpected account ID %q in results", id)
+		}
 	}
 }
 

@@ -159,10 +159,8 @@ Sentinel errors:
 
 | Error | Meaning |
 |-------|---------|
-| `ErrNoCredentials` | No credentials available for the environment |
 | `ErrAssumeRole` | STS AssumeRole failed for a target account |
 | `ErrOrgAPI` | Organizations API returned an unexpected error |
-| `ErrRegionAPI` | EC2 DescribeRegions failed |
 | `ErrInvalidEnv` | env was not `"com"` or `"gov"` |
 
 ---

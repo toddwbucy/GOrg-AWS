@@ -3,6 +3,9 @@ package gorgaws
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -32,6 +35,14 @@ func (m *mockOrgLister) ListAccountsForParent(_ context.Context, _ *organization
 		return nil, m.err
 	}
 	return &organizations.ListAccountsForParentOutput{Accounts: m.accounts}, nil
+}
+
+func (m *mockOrgLister) ListOrganizationalUnitsForParent(_ context.Context, _ *organizations.ListOrganizationalUnitsForParentInput, _ ...func(*organizations.Options)) (*organizations.ListOrganizationalUnitsForParentOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// No child OUs by default — tests that need nested OUs use the internal stub directly.
+	return &organizations.ListOrganizationalUnitsForParentOutput{}, nil
 }
 
 // newTestVisitor wires a visitor with a mock org client. Region discovery uses
@@ -316,6 +327,86 @@ func TestVisitOrganization_NilVisitors(t *testing.T) {
 	}
 }
 
+// TestVisitOrganization_WithRoleName verifies that the role name option is
+// passed through to the assumeRole function.
+func TestVisitOrganization_WithRoleName(t *testing.T) {
+	accounts := []orgtypes.Account{activeAccount("111111111111")}
+	var capturedRole string
+
+	v := newTestVisitor(accounts,
+		func(_ context.Context, base aws.Config, _, _, roleName string) (aws.Config, error) {
+			capturedRole = roleName
+			return base, nil
+		},
+		WithRoleName("MyCustomRole"),
+	)
+
+	_, err := v.VisitOrganization(context.Background(), "com", nil, nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedRole != "MyCustomRole" {
+		t.Errorf("assumeRole called with role=%q, want MyCustomRole", capturedRole)
+	}
+}
+
+// TestVisitOrganization_WithParentID verifies that a non-empty parentID is
+// respected: accounts are drawn from ListAccountsForParent, not ListAccounts.
+func TestVisitOrganization_WithParentID(t *testing.T) {
+	accounts := []orgtypes.Account{activeAccount("555555555555")}
+
+	var mu sync.Mutex
+	var visited []string
+
+	v := newTestVisitor(accounts, nil)
+
+	_, err := v.VisitOrganization(context.Background(), "com",
+		func(_ context.Context, _ aws.Config, accountID string) (any, error) {
+			mu.Lock()
+			visited = append(visited, accountID)
+			mu.Unlock()
+			return nil, nil
+		},
+		nil,
+		"ou-xxxx-xxxxxxxx",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(visited) != 1 || visited[0] != "555555555555" {
+		t.Errorf("visited %v, want [555555555555]", visited)
+	}
+}
+
+// TestVisitOrganization_Race exercises concurrent account+region visits under
+// the race detector. Run with: go test -race ./...
+func TestVisitOrganization_Race(t *testing.T) {
+	const numAccounts = 20
+	accounts := make([]orgtypes.Account, numAccounts)
+	for i := range accounts {
+		id := fmt.Sprintf("%012d", i)
+		accounts[i] = activeAccount(id)
+	}
+
+	v := newTestVisitor(accounts, nil, WithConcurrency(5))
+
+	results, err := v.VisitOrganization(context.Background(), "com",
+		func(_ context.Context, _ aws.Config, _ string) (any, error) {
+			return "ok", nil
+		},
+		func(_ context.Context, _ aws.Config, _, _ string) (any, error) {
+			return "ok", nil
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results.Accounts) != numAccounts {
+		t.Errorf("got %d accounts, want %d", len(results.Accounts), numAccounts)
+	}
+}
+
 // ── DryRun ────────────────────────────────────────────────────────────────
 
 func TestDryRun_ReturnsAccountsAndRegions(t *testing.T) {
@@ -459,5 +550,67 @@ func TestVisitResults_SuccessfulAndFailedAccounts(t *testing.T) {
 	}
 	if len(r.FailedAccounts()) != 2 {
 		t.Errorf("FailedAccounts=%d, want 2 (b and d)", len(r.FailedAccounts()))
+	}
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────
+
+// discardLogger returns a logger that discards all output — used in benchmarks
+// to prevent slog from dominating the measured time.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// BenchmarkVisitOrganization measures throughput of the concurrent visitor
+// against a mock org. Adjust numAccounts to model org size.
+//
+// Run: go test -bench=. -benchtime=5s ./...
+func BenchmarkVisitOrganization(b *testing.B) {
+	const numAccounts = 50
+	accounts := make([]orgtypes.Account, numAccounts)
+	for i := range accounts {
+		id := fmt.Sprintf("%012d", i)
+		accounts[i] = activeAccount(id)
+	}
+
+	v := newTestVisitor(accounts, nil, WithConcurrency(10), WithLogger(discardLogger()))
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := v.VisitOrganization(ctx, "com",
+			func(_ context.Context, _ aws.Config, _ string) (any, error) { return nil, nil },
+			func(_ context.Context, _ aws.Config, _, _ string) (any, error) { return nil, nil },
+			"",
+		)
+		if err != nil {
+			b.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
+
+// BenchmarkVisitOrganization_Sequential runs the same workload with
+// concurrency=1, giving a baseline to compare against the parallel default.
+func BenchmarkVisitOrganization_Sequential(b *testing.B) {
+	const numAccounts = 50
+	accounts := make([]orgtypes.Account, numAccounts)
+	for i := range accounts {
+		id := fmt.Sprintf("%012d", i)
+		accounts[i] = activeAccount(id)
+	}
+
+	v := newTestVisitor(accounts, nil, WithConcurrency(1), WithLogger(discardLogger()))
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := v.VisitOrganization(ctx, "com",
+			func(_ context.Context, _ aws.Config, _ string) (any, error) { return nil, nil },
+			func(_ context.Context, _ aws.Config, _, _ string) (any, error) { return nil, nil },
+			"",
+		)
+		if err != nil {
+			b.Fatalf("unexpected error: %v", err)
+		}
 	}
 }
