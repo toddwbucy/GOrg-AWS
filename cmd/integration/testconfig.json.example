@@ -5,7 +5,8 @@
   "secret_access_key": "...",
   "session_token":     "",
 
-  "env":         "com",
+  "home_region": "us-east-1",
+
   "role_name":   "OrganizationAccountAccessRole",
   "parent_id":   "",
   "concurrency": 5

@@ -35,12 +35,15 @@ import (
 // testConfig is the structure of testconfig.json.
 // Credentials may also come from environment variables (AWS_ACCESS_KEY_ID etc.)
 // if access_key_id is left blank in the file.
+//
+// home_region identifies the management account's primary region and determines
+// the partition automatically: us-gov-* → GovCloud, anything else → commercial.
 type testConfig struct {
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"`
 	SessionToken    string `json:"session_token"`
 
-	Env         string `json:"env"`
+	HomeRegion  string `json:"home_region"`
 	RoleName    string `json:"role_name"`
 	ParentID    string `json:"parent_id"`
 	Concurrency int    `json:"concurrency"`
@@ -68,6 +71,12 @@ func main() {
 		fatalf("load config: %v\n", err)
 	}
 
+	// Derive "com" or "gov" from the home region — no need to spell it out.
+	env, err := gorgaws.EnvFromRegion(tc.HomeRegion)
+	if err != nil {
+		fatalf("invalid home_region %q: %v\n", tc.HomeRegion, err)
+	}
+
 	ctx := context.Background()
 	baseCfg, err := buildAWSConfig(ctx, tc)
 	if err != nil {
@@ -83,10 +92,10 @@ func main() {
 
 	v := gorgaws.New(baseCfg, opts...)
 
-	printBanner(tc)
+	printBanner(tc, env)
 
 	// Always dry-run first to show scope.
-	accounts, regions, err := v.DryRun(ctx, tc.Env, tc.ParentID)
+	accounts, regions, err := v.DryRun(ctx, env, tc.ParentID)
 	if err != nil {
 		fatalf("dry run: %v\n", err)
 	}
@@ -102,7 +111,7 @@ func main() {
 	}
 
 	fmt.Println()
-	results, err := v.VisitOrganization(ctx, tc.Env,
+	results, err := v.VisitOrganization(ctx, env,
 		func(ctx context.Context, cfg aws.Config, accountID string) (any, error) {
 			c := sts.NewFromConfig(cfg)
 			out, err := c.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
@@ -138,9 +147,9 @@ func main() {
 
 // ── output ────────────────────────────────────────────────────────────────
 
-func printBanner(tc *testConfig) {
+func printBanner(tc *testConfig, env string) {
 	fmt.Println("=== gorg-aws integration test ===")
-	fmt.Printf("env:         %s\n", tc.Env)
+	fmt.Printf("home_region: %s  (env: %s)\n", tc.HomeRegion, env)
 	fmt.Printf("role:        %s\n", tc.RoleName)
 	parent := tc.ParentID
 	if parent == "" {
@@ -230,8 +239,8 @@ func loadTestConfig(path string) (*testConfig, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	if tc.Env == "" {
-		tc.Env = "com"
+	if tc.HomeRegion == "" {
+		tc.HomeRegion = "us-east-1"
 	}
 	if tc.RoleName == "" {
 		tc.RoleName = "OrganizationAccountAccessRole"

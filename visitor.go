@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 
 	"github.com/toddwbucy/gorg-aws/internal"
@@ -53,7 +52,6 @@ type OrgVisitor struct {
 
 	// Injectable factories — real SDK clients by default, mocks in tests.
 	newOrgClient func(aws.Config) internal.OrgLister
-	newEC2Client func(aws.Config) internal.RegionDescriber
 	assumeRole   func(context.Context, aws.Config, string, string, string) (aws.Config, error)
 }
 
@@ -75,9 +73,6 @@ func New(baseCfg aws.Config, opts ...Option) *OrgVisitor {
 		newOrgClient: func(cfg aws.Config) internal.OrgLister {
 			return organizations.NewFromConfig(cfg)
 		},
-		newEC2Client: func(cfg aws.Config) internal.RegionDescriber {
-			return ec2.NewFromConfig(cfg)
-		},
 		assumeRole: internal.AssumedConfig,
 	}
 	for _, o := range opts {
@@ -86,15 +81,42 @@ func New(baseCfg aws.Config, opts ...Option) *OrgVisitor {
 	return v
 }
 
+// EnvFromRegion returns "gov" for GovCloud regions and "com" for CONUS
+// commercial regions. Returns ErrInvalidEnv if region is not in the allowed set.
+//
+// This is the preferred way to derive env for VisitOrganization when your
+// config stores a region rather than an explicit "com"/"gov" label:
+//
+//	env, err := gorgaws.EnvFromRegion(cfg.HomeRegion)
+//	results, err := v.VisitOrganization(ctx, env, onAccount, onRegion, "")
+func EnvFromRegion(region string) (string, error) {
+	switch region {
+	case "us-gov-east-1", "us-gov-west-1":
+		return "gov", nil
+	case "us-east-1", "us-east-2", "us-west-1", "us-west-2":
+		return "com", nil
+	default:
+		return "", fmt.Errorf("%w: region %q is not in the allowed set", ErrInvalidEnv, region)
+	}
+}
+
+// AllowedRegions returns the fixed set of regions that will be visited.
+// includeGov=false → ["us-east-1", "us-east-2", "us-west-1", "us-west-2"]
+// includeGov=true  → ["us-gov-east-1", "us-gov-west-1"]
+func AllowedRegions(includeGov bool) []string {
+	return internal.AllowedRegions(includeGov)
+}
+
 // VisitOrganization walks every account in the organization (or under parentID)
 // and calls onAccount and onRegion with pre-assumed credentials for each.
 //
-// env must be "com" or "gov". parentID may be "" to walk the full organization.
+// env must be "com" or "gov" — use EnvFromRegion to derive it from a region name.
+// parentID may be "" to walk the full organization.
 // Either onAccount or onRegion may be nil to skip that visitor type.
 //
 // Errors from individual accounts are recorded in VisitResults.Accounts[id].Err
 // and do not abort the walk. A non-nil returned error indicates a fatal failure
-// (credentials, Organizations API, or region discovery).
+// (invalid env, or Organizations API unreachable).
 func (v *OrgVisitor) VisitOrganization(
 	ctx context.Context,
 	env string,
@@ -120,18 +142,12 @@ func (v *OrgVisitor) VisitOrganization(
 		return results, fmt.Errorf("%w: %w", ErrOrgAPI, err)
 	}
 
-	// Apply filter before region discovery: no need to call EC2 if there are
-	// no accounts to visit, or if no RegionVisitor was provided.
 	accountIDs = v.applyFilter(accountIDs)
 
+	// Region list is static — no EC2 DescribeRegions call needed.
 	var regions []string
 	if onRegion != nil && len(accountIDs) > 0 {
-		ec2Cfg := v.baseCfg.Copy()
-		ec2Cfg.Region = homeRegion
-		regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
-		if err != nil {
-			return results, fmt.Errorf("%w: %w", ErrRegionAPI, err)
-		}
+		regions = internal.AllowedRegions(includeGov)
 	}
 
 	v.logger.Info("starting org visit",
@@ -249,8 +265,7 @@ func (v *OrgVisitor) visitAccount(
 }
 
 // DryRun returns the accounts and regions that would be visited without
-// calling any visitor functions. Use this to validate org scope before
-// running expensive operations — no equivalent in the Python original.
+// calling any visitor functions or assuming any roles.
 func (v *OrgVisitor) DryRun(
 	ctx context.Context,
 	env string,
@@ -268,20 +283,8 @@ func (v *OrgVisitor) DryRun(
 		return nil, nil, fmt.Errorf("%w: %w", ErrOrgAPI, err)
 	}
 
-	// Apply filter before region discovery — no need to call EC2 if all
-	// accounts are filtered out. Mirrors the guard in VisitOrganization.
 	accountIDs = v.applyFilter(accountIDs)
-	if len(accountIDs) == 0 {
-		return accountIDs, nil, nil
-	}
-
-	ec2Cfg := v.baseCfg.Copy()
-	ec2Cfg.Region = homeRegion
-	regions, err = internal.GetUSRegions(ctx, v.newEC2Client(ec2Cfg), includeGov)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrRegionAPI, err)
-	}
-
+	regions = internal.AllowedRegions(includeGov)
 	return accountIDs, regions, nil
 }
 

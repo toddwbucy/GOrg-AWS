@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/organizations"
 	orgtypes "github.com/aws/aws-sdk-go-v2/service/organizations/types"
 
@@ -36,36 +34,17 @@ func (m *mockOrgLister) ListAccountsForParent(_ context.Context, _ *organization
 	return &organizations.ListAccountsForParentOutput{Accounts: m.accounts}, nil
 }
 
-type mockRegionDescriber struct {
-	regions []string
-	err     error
-}
-
-func (m *mockRegionDescriber) DescribeRegions(_ context.Context, _ *ec2.DescribeRegionsInput, _ ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	out := &ec2.DescribeRegionsOutput{}
-	for _, r := range m.regions {
-		name := r
-		out.Regions = append(out.Regions, ec2types.Region{RegionName: &name})
-	}
-	return out, nil
-}
-
-// newTestVisitor wires a visitor with mock clients. If assumeFn is nil, a
-// no-op assume that returns the base config unchanged is used.
+// newTestVisitor wires a visitor with a mock org client. Region discovery uses
+// the static AllowedRegions list — no EC2 mock needed.
 func newTestVisitor(
 	accounts []orgtypes.Account,
-	regions []string,
 	assumeFn func(context.Context, aws.Config, string, string, string) (aws.Config, error),
 	opts ...Option,
 ) *OrgVisitor {
 	v := New(aws.Config{}, opts...)
-	orgMock := &mockOrgLister{accounts: accounts}
-	ec2Mock := &mockRegionDescriber{regions: regions}
-	v.newOrgClient = func(_ aws.Config) internal.OrgLister { return orgMock }
-	v.newEC2Client = func(_ aws.Config) internal.RegionDescriber { return ec2Mock }
+	v.newOrgClient = func(_ aws.Config) internal.OrgLister {
+		return &mockOrgLister{accounts: accounts}
+	}
 	if assumeFn != nil {
 		v.assumeRole = assumeFn
 	} else {
@@ -78,6 +57,69 @@ func newTestVisitor(
 
 func activeAccount(id string) orgtypes.Account {
 	return orgtypes.Account{Id: &id, State: orgtypes.AccountStateActive}
+}
+
+// ── EnvFromRegion ─────────────────────────────────────────────────────────
+
+func TestEnvFromRegion(t *testing.T) {
+	tests := []struct {
+		region  string
+		wantEnv string
+		wantErr bool
+	}{
+		{"us-east-1", "com", false},
+		{"us-east-2", "com", false},
+		{"us-west-1", "com", false},
+		{"us-west-2", "com", false},
+		{"us-gov-east-1", "gov", false},
+		{"us-gov-west-1", "gov", false},
+		{"eu-west-1", "", true},
+		{"ap-southeast-1", "", true},
+		{"us-east-3", "", true}, // not in the allowed set
+		{"", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.region, func(t *testing.T) {
+			got, err := EnvFromRegion(tt.region)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("EnvFromRegion(%q) err=%v, wantErr=%v", tt.region, err, tt.wantErr)
+			}
+			if err != nil {
+				if !errors.Is(err, ErrInvalidEnv) {
+					t.Errorf("expected ErrInvalidEnv, got %v", err)
+				}
+				return
+			}
+			if got != tt.wantEnv {
+				t.Errorf("got %q, want %q", got, tt.wantEnv)
+			}
+		})
+	}
+}
+
+// ── AllowedRegions ────────────────────────────────────────────────────────
+
+func TestAllowedRegions(t *testing.T) {
+	com := AllowedRegions(false)
+	if len(com) != 4 {
+		t.Errorf("COM: got %d regions, want 4: %v", len(com), com)
+	}
+	gov := AllowedRegions(true)
+	if len(gov) != 2 {
+		t.Errorf("GOV: got %d regions, want 2: %v", len(gov), gov)
+	}
+	for _, r := range gov {
+		env, _ := EnvFromRegion(r)
+		if env != "gov" {
+			t.Errorf("GOV region %q does not round-trip through EnvFromRegion", r)
+		}
+	}
+	for _, r := range com {
+		env, _ := EnvFromRegion(r)
+		if env != "com" {
+			t.Errorf("COM region %q does not round-trip through EnvFromRegion", r)
+		}
+	}
 }
 
 // ── envConfig ─────────────────────────────────────────────────────────────
@@ -124,13 +166,12 @@ func TestVisitOrganization_CallsVisitors(t *testing.T) {
 		activeAccount("111111111111"),
 		activeAccount("222222222222"),
 	}
-	regions := []string{"us-east-1", "us-west-2"}
 
 	var mu sync.Mutex
 	var seenAccounts []string
 	var seenRegions []string
 
-	v := newTestVisitor(accounts, regions, nil)
+	v := newTestVisitor(accounts, nil)
 
 	results, err := v.VisitOrganization(context.Background(), "com",
 		func(_ context.Context, _ aws.Config, accountID string) (any, error) {
@@ -159,11 +200,10 @@ func TestVisitOrganization_CallsVisitors(t *testing.T) {
 	if len(seenAccounts) != 2 {
 		t.Errorf("AccountVisitor called %d times, want 2", len(seenAccounts))
 	}
-	// 2 accounts × 2 regions = 4 region visits.
-	if len(seenRegions) != 4 {
-		t.Errorf("RegionVisitor called %d times, want 4", len(seenRegions))
+	// 2 accounts × 4 CONUS regions = 8 region visits.
+	if len(seenRegions) != 8 {
+		t.Errorf("RegionVisitor called %d times, want 8", len(seenRegions))
 	}
-	// Verify result storage.
 	for _, id := range []string{"111111111111", "222222222222"} {
 		ar, ok := results.Accounts[id]
 		if !ok {
@@ -173,7 +213,7 @@ func TestVisitOrganization_CallsVisitors(t *testing.T) {
 		if ar.Result != "account-result" {
 			t.Errorf("account %s: Result=%v, want account-result", id, ar.Result)
 		}
-		for _, r := range regions {
+		for _, r := range AllowedRegions(false) {
 			rr, ok := ar.Regions[r]
 			if !ok {
 				t.Errorf("account %s missing region %s", id, r)
@@ -192,7 +232,7 @@ func TestVisitOrganization_AssumeRoleFailure(t *testing.T) {
 		activeAccount("222222222222"),
 	}
 
-	v := newTestVisitor(accounts, []string{"us-east-1"},
+	v := newTestVisitor(accounts,
 		func(_ context.Context, base aws.Config, accountID, _, _ string) (aws.Config, error) {
 			if accountID == "111111111111" {
 				return aws.Config{}, errors.New("access denied")
@@ -217,7 +257,7 @@ func TestVisitOrganization_AssumeRoleFailure(t *testing.T) {
 }
 
 func TestVisitOrganization_InvalidEnv(t *testing.T) {
-	v := newTestVisitor(nil, nil, nil)
+	v := newTestVisitor(nil, nil)
 	_, err := v.VisitOrganization(context.Background(), "invalid", nil, nil, "")
 	if !errors.Is(err, ErrInvalidEnv) {
 		t.Errorf("expected ErrInvalidEnv, got %v", err)
@@ -234,9 +274,9 @@ func TestVisitOrganization_AccountFilter(t *testing.T) {
 	var mu sync.Mutex
 	visited := make(map[string]bool)
 
-	v := newTestVisitor(accounts, []string{"us-east-1"}, nil,
+	v := newTestVisitor(accounts, nil,
 		WithAccountFilter(func(id string) bool {
-			return id == "222222222222" // skip this account
+			return id == "222222222222"
 		}),
 	)
 
@@ -265,9 +305,8 @@ func TestVisitOrganization_AccountFilter(t *testing.T) {
 
 func TestVisitOrganization_NilVisitors(t *testing.T) {
 	accounts := []orgtypes.Account{activeAccount("111111111111")}
-	v := newTestVisitor(accounts, []string{"us-east-1"}, nil)
+	v := newTestVisitor(accounts, nil)
 
-	// Both visitors nil — should complete without panic.
 	results, err := v.VisitOrganization(context.Background(), "com", nil, nil, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -284,9 +323,8 @@ func TestDryRun_ReturnsAccountsAndRegions(t *testing.T) {
 		activeAccount("111111111111"),
 		activeAccount("222222222222"),
 	}
-	regions := []string{"us-east-1", "us-east-2", "us-west-1", "us-west-2"}
 
-	v := newTestVisitor(accounts, regions, nil)
+	v := newTestVisitor(accounts, nil)
 
 	gotAccounts, gotRegions, err := v.DryRun(context.Background(), "com", "")
 	if err != nil {
@@ -295,13 +333,33 @@ func TestDryRun_ReturnsAccountsAndRegions(t *testing.T) {
 	if len(gotAccounts) != 2 {
 		t.Errorf("got %d accounts, want 2", len(gotAccounts))
 	}
+	// com env → 4 CONUS regions.
 	if len(gotRegions) != 4 {
 		t.Errorf("got %d regions, want 4", len(gotRegions))
 	}
 }
 
+func TestDryRun_GOVReturnsGovRegions(t *testing.T) {
+	accounts := []orgtypes.Account{activeAccount("111111111111")}
+	v := newTestVisitor(accounts, nil)
+
+	_, gotRegions, err := v.DryRun(context.Background(), "gov", "")
+	if err != nil {
+		t.Fatalf("DryRun error: %v", err)
+	}
+	if len(gotRegions) != 2 {
+		t.Errorf("got %d GOV regions, want 2: %v", len(gotRegions), gotRegions)
+	}
+	for _, r := range gotRegions {
+		env, _ := EnvFromRegion(r)
+		if env != "gov" {
+			t.Errorf("DryRun(gov) returned non-gov region %q", r)
+		}
+	}
+}
+
 func TestDryRun_InvalidEnv(t *testing.T) {
-	v := newTestVisitor(nil, nil, nil)
+	v := newTestVisitor(nil, nil)
 	_, _, err := v.DryRun(context.Background(), "bad", "")
 	if !errors.Is(err, ErrInvalidEnv) {
 		t.Errorf("expected ErrInvalidEnv, got %v", err)
@@ -313,7 +371,7 @@ func TestDryRun_AppliesFilter(t *testing.T) {
 		activeAccount("111111111111"),
 		activeAccount("222222222222"),
 	}
-	v := newTestVisitor(accounts, []string{"us-east-1"}, nil,
+	v := newTestVisitor(accounts, nil,
 		WithAccountFilter(func(id string) bool { return id == "222222222222" }),
 	)
 
@@ -323,29 +381,6 @@ func TestDryRun_AppliesFilter(t *testing.T) {
 	}
 	if len(gotAccounts) != 1 || gotAccounts[0] != "111111111111" {
 		t.Errorf("DryRun returned %v, want [111111111111]", gotAccounts)
-	}
-}
-
-func TestDryRun_AllFilteredSkipsRegionDiscovery(t *testing.T) {
-	accounts := []orgtypes.Account{activeAccount("111111111111")}
-	// ec2Mock errors — if GetUSRegions were called the test would fail.
-	v := New(aws.Config{})
-	orgMock := &mockOrgLister{accounts: accounts}
-	ec2Mock := &mockRegionDescriber{err: errors.New("should not be called")}
-	v.newOrgClient = func(_ aws.Config) internal.OrgLister { return orgMock }
-	v.newEC2Client = func(_ aws.Config) internal.RegionDescriber { return ec2Mock }
-	v.assumeRole = func(_ context.Context, base aws.Config, _, _, _ string) (aws.Config, error) { return base, nil }
-	v.filter = func(_ string) bool { return true } // filter everything
-
-	gotAccounts, gotRegions, err := v.DryRun(context.Background(), "com", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(gotAccounts) != 0 {
-		t.Errorf("got %d accounts, want 0", len(gotAccounts))
-	}
-	if len(gotRegions) != 0 {
-		t.Errorf("got %d regions, want 0 (region discovery should be skipped)", len(gotRegions))
 	}
 }
 
@@ -413,7 +448,6 @@ func TestVisitResults_SuccessfulAndFailedAccounts(t *testing.T) {
 			"a": {Err: nil},
 			"b": {Err: errors.New("boom")},
 			"c": {Err: nil},
-			// account-level Err is nil but a region failed — should be counted as failed
 			"d": {
 				Err:     nil,
 				Regions: map[string]*RegionResult{"us-east-1": {Err: errors.New("region boom")}},

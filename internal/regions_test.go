@@ -1,83 +1,42 @@
 package internal
 
-import (
-	"context"
-	"errors"
-	"testing"
+import "testing"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-)
-
-type stubRegionDescriber struct {
-	regions []string
-	err     error
-}
-
-func (s *stubRegionDescriber) DescribeRegions(_ context.Context, _ *ec2.DescribeRegionsInput, _ ...func(*ec2.Options)) (*ec2.DescribeRegionsOutput, error) {
-	if s.err != nil {
-		return nil, s.err
+func TestAllowedRegions_COM(t *testing.T) {
+	regions := AllowedRegions(false)
+	want := []string{"us-east-1", "us-east-2", "us-west-1", "us-west-2"}
+	if len(regions) != len(want) {
+		t.Fatalf("got %d regions, want %d: %v", len(regions), len(want), regions)
 	}
-	out := &ec2.DescribeRegionsOutput{}
-	for _, r := range s.regions {
-		out.Regions = append(out.Regions, ec2types.Region{RegionName: aws.String(r)})
-	}
-	return out, nil
-}
-
-var allRegions = []string{
-	"us-east-1",
-	"us-east-2",
-	"us-west-1",
-	"us-west-2",
-	"us-gov-west-1",
-	"us-gov-east-1",
-	"eu-west-1",      // non-US, should always be excluded
-	"ap-southeast-1", // non-US, should always be excluded
-}
-
-func TestGetUSRegions_ExcludeGov(t *testing.T) {
-	stub := &stubRegionDescriber{regions: allRegions}
-	got, err := GetUSRegions(context.Background(), stub, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	for _, r := range got {
-		if r == "eu-west-1" || r == "ap-southeast-1" {
-			t.Errorf("non-US region %s should not be returned", r)
-		}
-		if r == "us-gov-west-1" || r == "us-gov-east-1" {
-			t.Errorf("GovCloud region %s should not be returned when includeGov=false", r)
+	for i, r := range want {
+		if regions[i] != r {
+			t.Errorf("regions[%d]=%q, want %q", i, regions[i], r)
 		}
 	}
-	// Should have the 4 commercial US regions.
-	if len(got) != 4 {
-		t.Errorf("got %d regions, want 4: %v", len(got), got)
+	// Verify callers cannot mutate the internal slice.
+	regions[0] = "mutated"
+	if AllowedRegions(false)[0] != "us-east-1" {
+		t.Error("AllowedRegions returned a mutable reference to the internal slice")
 	}
 }
 
-func TestGetUSRegions_IncludeGov(t *testing.T) {
-	stub := &stubRegionDescriber{regions: allRegions}
-	got, err := GetUSRegions(context.Background(), stub, true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestAllowedRegions_GOV(t *testing.T) {
+	regions := AllowedRegions(true)
+	want := []string{"us-gov-east-1", "us-gov-west-1"}
+	if len(regions) != len(want) {
+		t.Fatalf("got %d regions, want %d: %v", len(regions), len(want), regions)
 	}
-	for _, r := range got {
-		if r == "eu-west-1" || r == "ap-southeast-1" {
-			t.Errorf("non-US region %s should not be returned", r)
+	for i, r := range want {
+		if regions[i] != r {
+			t.Errorf("regions[%d]=%q, want %q", i, regions[i], r)
 		}
 	}
-	// All 6 US regions (4 commercial + 2 gov) should be present.
-	if len(got) != 6 {
-		t.Errorf("got %d regions, want 6: %v", len(got), got)
-	}
 }
 
-func TestGetUSRegions_Error(t *testing.T) {
-	stub := &stubRegionDescriber{err: errors.New("throttled")}
-	_, err := GetUSRegions(context.Background(), stub, false)
-	if err == nil {
-		t.Fatal("expected error, got nil")
+func TestAllowedRegions_NoGovInCOM(t *testing.T) {
+	for _, r := range AllowedRegions(false) {
+		if len(r) > 6 && r[:7] == "us-gov-" {
+			t.Errorf("COM regions should not contain GovCloud region %q", r)
+		}
 	}
 }
