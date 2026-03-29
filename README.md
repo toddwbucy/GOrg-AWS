@@ -1,6 +1,6 @@
 # gorg-aws
 
-Go module implementing the AWS Organization Visitor pattern — a type-safe, concurrent equivalent of the internal Python `org_visitor` library.
+Go module implementing the AWS Organization Visitor pattern that is type-safe, concurrent equivalent of the internal Python `org_visitor` library.
 
 Callers supply visitor functions; `gorg-aws` handles Organizations API pagination, STS role assumption, and region discovery. Visitor functions receive a pre-configured `aws.Config` and never touch credentials or ARNs directly.
 
