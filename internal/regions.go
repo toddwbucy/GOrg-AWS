@@ -6,7 +6,7 @@ const (
 	PartitionGOV = "aws-us-gov"
 )
 
-// allowedCOM and allowedGOV are the only regions supported by CloudOpsTools.
+// allowedCOM and allowedGOV are the only regions supported by gorg-aws.
 // Dynamic region discovery (ec2.DescribeRegions) is intentionally not used —
 // the allowed set is fixed to CONUS commercial and GovCloud regions.
 var (

@@ -29,6 +29,12 @@ go.work.sum
 
 # Integration test credentials — never commit real creds
 cmd/integration/testconfig.json
+cmd/integration/testconfig-gov.json
+
+# Compiled example/integration binaries (built via go build ./...)
+/integration
+/list_instances
+/org_inventory
 
 # Editor/IDE
 # .idea/
