@@ -267,6 +267,8 @@ func buildAWSConfig(ctx context.Context, tc *testConfig) (aws.Config, error) {
 		))
 	}
 
+	opts = append(opts, config.WithRegion(tc.HomeRegion))
+
 	return config.LoadDefaultConfig(ctx, opts...)
 }
 

@@ -5,7 +5,7 @@
 // Usage:
 //
 //	AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=... \
-//	  go run ./examples/list_instances --env com
+//	  go run ./examples/list_instances --region us-east-1
 package main
 
 import (
@@ -29,13 +29,19 @@ type regionSummary struct {
 }
 
 func main() {
-	env := flag.String("env", "com", "AWS environment: com or gov")
+	region := flag.String("region", "us-east-1", "home region of the management account (determines partition)")
 	parentID := flag.String("parent", "", "optional OU ID to scope traversal")
 	flag.Parse()
 
+	env, err := gorgaws.EnvFromRegion(*region)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid region: %v\n", err)
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
@@ -46,7 +52,7 @@ func main() {
 		gorgaws.WithRoleName("OrganizationAccountAccessRole"),
 	)
 
-	results, err := v.VisitOrganization(ctx, *env,
+	results, err := v.VisitOrganization(ctx, env,
 		// AccountVisitor — called once per account.
 		// cfg already has assumed-role credentials; callers never touch auth.
 		func(_ context.Context, _ aws.Config, accountID string) (any, error) {

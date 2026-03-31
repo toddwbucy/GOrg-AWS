@@ -1,11 +1,11 @@
 // org_inventory prints a summary of all accounts in the organization and the
-// enabled EC2 regions in each. It uses DryRun first so no visitor functions
+// regions that would be visited. It uses DryRun first so no visitor functions
 // are run — this is the safe way to preview scope before a real operation.
 //
 // Usage:
 //
 //	AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=... \
-//	  go run ./examples/org_inventory --env com
+//	  go run ./examples/org_inventory --region us-east-1
 package main
 
 import (
@@ -21,14 +21,20 @@ import (
 )
 
 func main() {
-	env := flag.String("env", "com", "AWS environment: com or gov")
+	region := flag.String("region", "us-east-1", "home region of the management account (determines partition)")
 	parentID := flag.String("parent", "", "optional OU ID to scope traversal")
 	concurrency := flag.Int("concurrency", 10, "max concurrent account visits")
 	flag.Parse()
 
+	env, err := gorgaws.EnvFromRegion(*region)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid region: %v\n", err)
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*region))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)
@@ -39,8 +45,8 @@ func main() {
 	)
 
 	// DryRun: list what would be visited without assuming any roles.
-	fmt.Printf("=== DryRun: env=%s parent=%q ===\n", *env, *parentID)
-	accounts, regions, err := v.DryRun(ctx, *env, *parentID)
+	fmt.Printf("=== DryRun: env=%s parent=%q ===\n", env, *parentID)
+	accounts, regions, err := v.DryRun(ctx, env, *parentID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dry run: %v\n", err)
 		os.Exit(1)
@@ -65,7 +71,7 @@ func main() {
 	}
 
 	// Real visit: visit each account, collect results.
-	results, err := v.VisitOrganization(ctx, *env,
+	results, err := v.VisitOrganization(ctx, env,
 		func(_ context.Context, _ aws.Config, accountID string) (any, error) {
 			// account-level work — see list_instances example for a full implementation
 			return map[string]string{"account": accountID}, nil
